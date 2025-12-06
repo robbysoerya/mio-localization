@@ -3,6 +3,7 @@ import {
   Get,
   Post,
   Patch,
+  Delete,
   Body,
   Param,
   UseInterceptors,
@@ -14,6 +15,8 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { TranslationsService } from './translations.service';
 import { CreateTranslationDto } from './dto/create-translation.dto';
 import { UpdateTranslationDto } from './dto/update-translation.dto';
+import { PaginationQueryDto } from './dto/pagination.dto';
+import { SearchTranslationDto } from './dto/search-translation.dto';
 
 @Controller('translations')
 export class TranslationsController {
@@ -55,5 +58,25 @@ export class TranslationsController {
   @Patch(':id')
   update(@Param('id') id: string, @Body() dto: UpdateTranslationDto) {
     return this.svc.update(id, dto);
+  }
+
+  @Delete(':id')
+  async remove(@Param('id') id: string) {
+    return await this.svc.remove(id);
+  }
+
+  @Get('statistics')
+  getStatistics(@Query('featureId') featureId?: string) {
+    return this.svc.getStatistics(featureId);
+  }
+
+  @Get('search')
+  search(@Query() query: SearchTranslationDto) {
+    return this.svc.searchTranslations(query);
+  }
+
+  @Get()
+  findAll(@Query() query: PaginationQueryDto) {
+    return this.svc.findAll(query);
   }
 }

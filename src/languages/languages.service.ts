@@ -13,7 +13,7 @@ export class LanguagesService {
 
   findAll() {
     return this.prisma.language.findMany({
-      orderBy: { createdAt: 'desc' },
+      orderBy: { createdAt: 'asc' },
     });
   }
 
