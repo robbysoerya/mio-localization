@@ -1,0 +1,4 @@
+key,id,en
+welcome_message,Selamat datang di aplikasi kami!,Welcome to our application!
+goodbye_message,Sampai jumpa lagi!,Goodbye and see you soon!
+error_not_found,Sumber daya yang diminta tidak ditemukan,The requested resource was not found

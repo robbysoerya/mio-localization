@@ -1,0 +1,115 @@
+// ----------
+// Datasource & Generator
+// ----------
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ----------
+// Core Models
+// ----------
+
+model Feature {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  isActive    Boolean  @default(true)
+
+  keys        Key[]
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([name])
+}
+
+model Key {
+  id          String   @id @default(cuid())
+  key         String
+  description String?
+  featureId   String
+  isActive    Boolean  @default(true)
+
+  feature     Feature  @relation(fields: [featureId], references: [id])
+  translations Translation[]
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([featureId, key])
+  @@index([featureId])
+}
+
+model Translation {
+  id        String   @id @default(cuid())
+  keyId     String
+  locale    String
+  value     String?
+  isReviewed Boolean @default(false)
+
+  key       Key      @relation(fields: [keyId], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([keyId, locale])
+  @@index([locale])
+}
+
+// ----------
+// Language list (optional but recommended)
+// ----------
+model Language {
+  id       String   @id @default(cuid())
+  locale   String   @unique     // e.g. "en", "id", "zh", etc.
+  name     String               // English, Indonesian, Chinese
+  isActive Boolean  @default(true)
+
+  createdAt DateTime @default(now())
+}
+
+// ----------
+// Authentication
+// ----------
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  name      String?
+  image     String?
+  role      UserRole @default(USER)
+  isActive  Boolean  @default(true)
+
+  auditLogs AuditLog[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+enum UserRole {
+  ADMIN
+  EDITOR
+  USER
+}
+
+// ----------
+// Audit Logging
+// ----------
+model AuditLog {
+  id        String   @id @default(cuid())
+  userId    String?
+  action    String
+  entity    String
+  entityId  String?
+  changes   Json?
+
+  user      User?    @relation(fields: [userId], references: [id])
+
+  createdAt DateTime @default(now())
+
+  @@index([entity])
+  @@index([userId])
+}
