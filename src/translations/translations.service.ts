@@ -1,9 +1,10 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { Prisma } from '@prisma/client';
 import { CreateTranslationDto } from './dto/create-translation.dto';
 import { UpdateTranslationDto } from './dto/update-translation.dto';
 import { BulkUploadResultDto } from './dto/bulk-upload-result.dto';
+import { BulkUpsertTranslationDto } from './dto/bulk-upsert-translation.dto';
 import { TranslationStatisticsDto } from './dto/translation-statistics.dto';
 import { MissingTranslationDto } from './dto/missing-translation.dto';
 import { PaginationQueryDto, PaginatedResponseDto } from './dto/pagination.dto';
@@ -29,6 +30,41 @@ export class TranslationsService {
       create: data,
       update: { value: data.value },
     });
+  }
+
+  async bulkUpsert(data: BulkUpsertTranslationDto) {
+    // Validate that the key exists
+    const key = await this.prisma.key.findUnique({
+      where: { id: data.keyId },
+    });
+
+    if (!key) {
+      throw new NotFoundException(`Key with id ${data.keyId} not found`);
+    }
+
+    // Use transaction to upsert all translations atomically
+    const results = await this.prisma.$transaction(
+      data.translations.map((translation) =>
+        this.prisma.translation.upsert({
+          where: {
+            keyId_locale: {
+              keyId: data.keyId,
+              locale: translation.locale,
+            },
+          },
+          create: {
+            keyId: data.keyId,
+            locale: translation.locale,
+            value: translation.value,
+          },
+          update: {
+            value: translation.value,
+          },
+        }),
+      ),
+    );
+
+    return results;
   }
 
   async findAll(

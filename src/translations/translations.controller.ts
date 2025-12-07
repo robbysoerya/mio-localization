@@ -15,6 +15,7 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { TranslationsService } from './translations.service';
 import { CreateTranslationDto } from './dto/create-translation.dto';
 import { UpdateTranslationDto } from './dto/update-translation.dto';
+import { BulkUpsertTranslationDto } from './dto/bulk-upsert-translation.dto';
 import { PaginationQueryDto } from './dto/pagination.dto';
 import { SearchTranslationDto } from './dto/search-translation.dto';
 
@@ -25,6 +26,11 @@ export class TranslationsController {
   @Post()
   create(@Body() dto: CreateTranslationDto) {
     return this.svc.create(dto);
+  }
+
+  @Post('bulk-upsert')
+  bulkUpsert(@Body() dto: BulkUpsertTranslationDto) {
+    return this.svc.bulkUpsert(dto);
   }
 
   @Post('bulk-upload')
