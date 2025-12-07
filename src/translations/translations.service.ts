@@ -1,10 +1,16 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, Logger } from '@nestjs/common';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { Prisma } from '@prisma/client';
 import { CreateTranslationDto } from './dto/create-translation.dto';
 import { UpdateTranslationDto } from './dto/update-translation.dto';
 import { BulkUploadResultDto } from './dto/bulk-upload-result.dto';
 import { BulkUpsertTranslationDto } from './dto/bulk-upsert-translation.dto';
+import {
+  AiTranslateDto,
+  AiTranslateBatchDto,
+  AiTranslateResultDto,
+  AiTranslateBatchResultDto,
+} from './dto/ai-translate.dto';
 import { TranslationStatisticsDto } from './dto/translation-statistics.dto';
 import { MissingTranslationDto } from './dto/missing-translation.dto';
 import { PaginationQueryDto, PaginatedResponseDto } from './dto/pagination.dto';
@@ -12,12 +18,18 @@ import {
   SearchTranslationDto,
   TranslationItemDto,
 } from './dto/search-translation.dto';
+import { AiService } from 'src/ai/ai.service';
 import csv from 'csv-parser';
 import { Readable } from 'stream';
 
 @Injectable()
 export class TranslationsService {
-  constructor(private prisma: PrismaService) {}
+  private readonly logger = new Logger(TranslationsService.name);
+
+  constructor(
+    private prisma: PrismaService,
+    private aiService: AiService,
+  ) {}
 
   create(data: CreateTranslationDto) {
     return this.prisma.translation.upsert({
@@ -65,6 +77,283 @@ export class TranslationsService {
     );
 
     return results;
+  }
+
+  async aiTranslate(dto: AiTranslateDto): Promise<AiTranslateResultDto> {
+    // Get key with existing translations
+    const key = await this.prisma.key.findUnique({
+      where: { id: dto.keyId },
+      include: {
+        translations: true,
+      },
+    });
+
+    if (!key) {
+      throw new NotFoundException(`Key with id ${dto.keyId} not found`);
+    }
+
+    // Auto-detect source locale from existing translations
+    const sourceTranslation = key.translations.find(
+      (t) => t.value && t.value.trim() !== '',
+    );
+
+    if (!sourceTranslation) {
+      throw new NotFoundException(
+        `No existing translation found for key ${dto.keyId}. Cannot auto-detect source locale.`,
+      );
+    }
+
+    const sourceLocale = sourceTranslation.locale;
+    const sourceText = sourceTranslation.value!;
+
+    this.logger.log(
+      `Auto-detected source locale: ${sourceLocale} for key ${dto.keyId}`,
+    );
+
+    // Filter out target locales that already have translations
+    const existingLocales = new Set(
+      key.translations
+        .filter((t) => t.value && t.value.trim() !== '')
+        .map((t) => t.locale),
+    );
+
+    const targetLocales = dto.targetLocales.filter(
+      (locale) => !existingLocales.has(locale),
+    );
+
+    if (targetLocales.length === 0) {
+      return {
+        success: true,
+        translatedCount: 0,
+        skippedCount: dto.targetLocales.length,
+        errors: [],
+        translations: [],
+      };
+    }
+
+    this.logger.log(
+      `Translating "${sourceText}" from ${sourceLocale} to ${targetLocales.join(', ')}`,
+    );
+
+    // Call AI service for translations
+    const translationRequests = targetLocales.map((locale) => ({
+      text: sourceText,
+      targetLocale: locale,
+      sourceLocale,
+    }));
+
+    const aiResults = await this.aiService.translateBatch(translationRequests);
+
+    // Prepare bulk upsert data
+    const successfulTranslations = aiResults.filter((r) => !r.error);
+    const errors = aiResults
+      .filter((r) => r.error)
+      .map((r) => ({ locale: r.locale, error: r.error! }));
+
+    // Bulk upsert successful translations
+    const translations =
+      successfulTranslations.length > 0
+        ? await this.prisma.$transaction(
+            successfulTranslations.map((result) =>
+              this.prisma.translation.upsert({
+                where: {
+                  keyId_locale: {
+                    keyId: dto.keyId,
+                    locale: result.locale,
+                  },
+                },
+                create: {
+                  keyId: dto.keyId,
+                  locale: result.locale,
+                  value: result.value,
+                  isReviewed: false, // Mark as unreviewed for human verification
+                },
+                update: {
+                  value: result.value,
+                  isReviewed: false,
+                },
+              }),
+            ),
+          )
+        : [];
+
+    return {
+      success: errors.length === 0,
+      translatedCount: successfulTranslations.length,
+      skippedCount: dto.targetLocales.length - targetLocales.length,
+      errors,
+      translations,
+    };
+  }
+
+  async aiTranslateBatch(
+    dto: AiTranslateBatchDto,
+  ): Promise<AiTranslateBatchResultDto> {
+    const startTime = Date.now();
+
+    // Get missing translations using existing statistics method
+    const stats = await this.getStatistics(dto.featureId, dto.projectId);
+    const missingTranslations = stats.missingTranslations;
+
+    if (missingTranslations.length === 0) {
+      return {
+        success: true,
+        translatedCount: 0,
+        skippedCount: 0,
+        errors: [],
+        statistics: {
+          totalKeys: 0,
+          processedKeys: 0,
+          estimatedTimeSeconds: 0,
+        },
+      };
+    }
+
+    // Get active locales for the project
+    let projectId = dto.projectId;
+    if (!projectId && dto.featureId) {
+      const feature = await this.prisma.feature.findUnique({
+        where: { id: dto.featureId },
+        select: { projectId: true },
+      });
+      projectId = feature?.projectId;
+    }
+
+    const activeLocales = await this.prisma.language.findMany({
+      where: { isActive: true, ...(projectId && { projectId }) },
+      select: { locale: true },
+    });
+    const validLocales = new Set(activeLocales.map((l) => l.locale));
+
+    // Filter target locales if specified
+    const targetLocales = dto.targetLocales
+      ? dto.targetLocales.filter((l) => validLocales.has(l))
+      : Array.from(validLocales);
+
+    let translatedCount = 0;
+    let skippedCount = 0;
+    const errors: Array<{ keyId: string; locale: string; error: string }> = [];
+    let processedKeys = 0;
+
+    this.logger.log(
+      `Starting batch translation for ${missingTranslations.length} keys`,
+    );
+
+    // Process each key
+    for (const missing of missingTranslations) {
+      try {
+        // Get the key with translations
+        const key = await this.prisma.key.findUnique({
+          where: { id: missing.keyId },
+          include: { translations: true },
+        });
+
+        if (!key) {
+          errors.push({
+            keyId: missing.keyId,
+            locale: 'all',
+            error: 'Key not found',
+          });
+          continue;
+        }
+
+        // Find source translation
+        const sourceTranslation = key.translations.find(
+          (t) => t.value && t.value.trim() !== '',
+        );
+
+        if (!sourceTranslation) {
+          skippedCount += missing.missingLocales.length;
+          continue;
+        }
+
+        // Filter missing locales to only include target locales
+        const localesToTranslate = missing.missingLocales.filter((locale) =>
+          targetLocales.includes(locale),
+        );
+
+        if (localesToTranslate.length === 0) {
+          continue;
+        }
+
+        // Translate using AI
+        const translationRequests = localesToTranslate.map((locale) => ({
+          text: sourceTranslation.value!,
+          targetLocale: locale,
+          sourceLocale: sourceTranslation.locale,
+        }));
+
+        const aiResults =
+          await this.aiService.translateBatch(translationRequests);
+
+        // Upsert successful translations
+        const successfulTranslations = aiResults.filter((r) => !r.error);
+        if (successfulTranslations.length > 0) {
+          await this.prisma.$transaction(
+            successfulTranslations.map((result) =>
+              this.prisma.translation.upsert({
+                where: {
+                  keyId_locale: {
+                    keyId: missing.keyId,
+                    locale: result.locale,
+                  },
+                },
+                create: {
+                  keyId: missing.keyId,
+                  locale: result.locale,
+                  value: result.value,
+                  isReviewed: false,
+                },
+                update: {
+                  value: result.value,
+                  isReviewed: false,
+                },
+              }),
+            ),
+          );
+          translatedCount += successfulTranslations.length;
+        }
+
+        // Track errors
+        const failedTranslations = aiResults.filter((r) => r.error);
+        failedTranslations.forEach((r) => {
+          errors.push({
+            keyId: missing.keyId,
+            locale: r.locale,
+            error: r.error!,
+          });
+        });
+
+        processedKeys++;
+      } catch (error) {
+        this.logger.error(
+          `Error processing key ${missing.keyId}: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        );
+        errors.push({
+          keyId: missing.keyId,
+          locale: 'all',
+          error: error instanceof Error ? error.message : 'Unknown error',
+        });
+      }
+    }
+
+    const estimatedTimeSeconds = Math.round((Date.now() - startTime) / 1000);
+
+    this.logger.log(
+      `Batch translation completed: ${translatedCount} translations created, ${errors.length} errors`,
+    );
+
+    return {
+      success: errors.length === 0,
+      translatedCount,
+      skippedCount,
+      errors,
+      statistics: {
+        totalKeys: missingTranslations.length,
+        processedKeys,
+        estimatedTimeSeconds,
+      },
+    };
   }
 
   async findAll(
