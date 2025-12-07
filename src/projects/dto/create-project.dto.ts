@@ -1,15 +1,11 @@
 import { IsNotEmpty, IsOptional, IsString } from 'class-validator';
 
-export class CreateFeatureDto {
+export class CreateProjectDto {
   @IsString()
   @IsNotEmpty()
   name: string;
 
+  @IsString()
   @IsOptional()
-  @IsString()
   description?: string;
-
-  @IsString()
-  @IsNotEmpty()
-  projectId: string;
 }

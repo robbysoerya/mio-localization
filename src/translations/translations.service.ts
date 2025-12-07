@@ -114,9 +114,24 @@ export class TranslationsService {
       errors: [],
     };
 
-    // Get all active locales
+    // Get feature to determine projectId
+    const feature = await this.prisma.feature.findUnique({
+      where: { id: featureId },
+      select: { projectId: true },
+    });
+
+    if (!feature) {
+      result.errors.push({
+        row: 0,
+        error: 'Feature not found',
+      });
+      result.success = false;
+      return result;
+    }
+
+    // Get all active locales for this project
     const activeLocales = await this.prisma.language.findMany({
-      where: { isActive: true },
+      where: { isActive: true, projectId: feature.projectId },
       select: { locale: true },
     });
     const validLocales = new Set(activeLocales.map((l) => l.locale));
@@ -251,16 +266,42 @@ export class TranslationsService {
     return result;
   }
 
-  async getStatistics(featureId?: string): Promise<TranslationStatisticsDto> {
-    // Get all active locales
+  async getStatistics(
+    featureId?: string,
+    projectId?: string,
+  ): Promise<TranslationStatisticsDto> {
+    // Determine projectId if not provided
+    let effectiveProjectId = projectId;
+    if (!effectiveProjectId && featureId) {
+      const feature = await this.prisma.feature.findUnique({
+        where: { id: featureId },
+        select: { projectId: true },
+      });
+      effectiveProjectId = feature?.projectId;
+    }
+
+    // Get all active locales for the project
+    const whereLanguage = effectiveProjectId
+      ? { isActive: true, projectId: effectiveProjectId }
+      : { isActive: true };
     const activeLocales = await this.prisma.language.findMany({
-      where: { isActive: true },
+      where: whereLanguage,
       select: { locale: true },
     });
     const locales = activeLocales.map((l) => l.locale);
 
     // Build where clause for keys
-    const whereClause = featureId ? { featureId } : {};
+    const whereClause: Prisma.KeyWhereInput = {};
+
+    if (featureId) {
+      whereClause.featureId = featureId;
+    }
+
+    if (projectId) {
+      whereClause.feature = {
+        projectId: projectId,
+      };
+    }
 
     // Get all keys with their translations and feature info
     const keys = await this.prisma.key.findMany({
@@ -279,6 +320,13 @@ export class TranslationsService {
             id: true,
             name: true,
             isActive: true,
+            projectId: true,
+            project: {
+              select: {
+                id: true,
+                name: true,
+              },
+            },
           },
         },
       },
@@ -398,6 +446,8 @@ export class TranslationsService {
           keyName: key.key,
           featureId: key.feature.id,
           featureName: key.feature.name,
+          projectId: key.feature.projectId,
+          projectName: key.feature.project.name,
           missingLocales,
           filledLocales,
         });
@@ -535,6 +585,16 @@ export class TranslationsService {
       whereClause.key = {
         ...(whereClause.key as Prisma.KeyWhereInput),
         featureId: query.featureId,
+      };
+    }
+
+    // Add project filter
+    if (query.projectId) {
+      whereClause.key = {
+        ...(whereClause.key as Prisma.KeyWhereInput),
+        feature: {
+          projectId: query.projectId,
+        },
       };
     }
 

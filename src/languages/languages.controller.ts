@@ -6,6 +6,7 @@ import {
   Patch,
   Param,
   Delete,
+  Query,
 } from '@nestjs/common';
 import { LanguagesService } from './languages.service';
 import { CreateLanguageDto } from './dto/create-language.dto';
@@ -21,8 +22,8 @@ export class LanguagesController {
   }
 
   @Get()
-  findAll() {
-    return this.languagesService.findAll();
+  findAll(@Query('projectId') projectId?: string) {
+    return this.languagesService.findAll(projectId);
   }
 
   @Get(':id')

@@ -6,6 +6,7 @@ import {
   Param,
   Patch,
   Post,
+  Query,
 } from '@nestjs/common';
 import { FeaturesService } from './features.service';
 import { CreateFeatureDto } from './dto/create-feature.dto';
@@ -21,8 +22,8 @@ export class FeaturesController {
   }
 
   @Get()
-  findAll() {
-    return this.featuresService.findAll();
+  findAll(@Query('projectId') projectId?: string) {
+    return this.featuresService.findAll(projectId);
   }
 
   @Get(':id')

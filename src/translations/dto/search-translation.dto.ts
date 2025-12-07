@@ -4,6 +4,7 @@ export class SearchTranslationDto extends PaginationQueryDto {
   q?: string; // search query
   locale?: string; // filter by locale
   featureId?: string; // filter by feature
+  projectId?: string; // filter by project
 }
 
 export class TranslationItemDto {

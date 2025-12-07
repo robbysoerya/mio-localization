@@ -14,8 +14,10 @@ export class FeaturesService {
     return { ...feature, totalKeys: 0 };
   }
 
-  async findAll(): Promise<FeatureResponseDto[]> {
+  async findAll(projectId?: string): Promise<FeatureResponseDto[]> {
+    const where = projectId ? { projectId } : {};
     const features = await this.prisma.feature.findMany({
+      where,
       include: {
         _count: {
           select: { keys: true },
@@ -73,7 +75,28 @@ export class FeaturesService {
     };
   }
 
-  remove(id: string) {
-    return this.prisma.feature.delete({ where: { id } });
+  async remove(id: string) {
+    return this.prisma.$transaction(async (tx) => {
+      // 1. Delete all translations for keys belonging to this feature
+      await tx.translation.deleteMany({
+        where: {
+          key: {
+            featureId: id,
+          },
+        },
+      });
+
+      // 2. Delete all keys for this feature
+      await tx.key.deleteMany({
+        where: {
+          featureId: id,
+        },
+      });
+
+      // 3. Delete the feature
+      return tx.feature.delete({
+        where: { id },
+      });
+    });
   }
 }

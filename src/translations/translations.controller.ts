@@ -66,8 +66,11 @@ export class TranslationsController {
   }
 
   @Get('statistics')
-  getStatistics(@Query('featureId') featureId?: string) {
-    return this.svc.getStatistics(featureId);
+  getStatistics(
+    @Query('featureId') featureId?: string,
+    @Query('projectId') projectId?: string,
+  ) {
+    return this.svc.getStatistics(featureId, projectId);
   }
 
   @Get('search')
