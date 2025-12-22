@@ -16,7 +16,6 @@ export class BulkUpsertTranslationDto {
 
   @IsArray()
   @ValidateNested({ each: true })
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-call
   @Type(() => TranslationInput)
   translations: TranslationInput[];
 }

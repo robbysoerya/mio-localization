@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { GoogleGenAI } from '@google/genai';
+import OpenAI from 'openai';
 
 interface TranslationRequest {
   text: string;
@@ -10,15 +10,15 @@ interface TranslationRequest {
 @Injectable()
 export class AiService {
   private readonly logger = new Logger(AiService.name);
-  private ai: GoogleGenAI;
-  private modelName = 'gemini-2.5-flash';
+  private openai: OpenAI;
+  private modelName = 'gpt-4o-mini'; // Cost-effective model for translations
 
   constructor() {
-    const apiKey = process.env.GEMINI_API_KEY;
+    const apiKey = process.env.OPENAI_API_KEY;
     if (!apiKey) {
-      this.logger.warn('GEMINI_API_KEY not found in environment variables');
+      this.logger.warn('OPENAI_API_KEY not found in environment variables');
     } else {
-      this.ai = new GoogleGenAI({ apiKey });
+      this.openai = new OpenAI({ apiKey });
     }
   }
 
@@ -30,25 +30,40 @@ export class AiService {
     targetLocale: string,
     sourceLocale?: string,
   ): Promise<string> {
-    if (!this.ai) {
-      throw new Error('Gemini API not configured. Please set GEMINI_API_KEY');
+    if (!this.openai) {
+      throw new Error('OpenAI API not configured. Please set OPENAI_API_KEY');
     }
 
     const sourceInfo = sourceLocale
       ? `from ${this.getLanguageName(sourceLocale)}`
       : '';
-    const prompt = `Translate the following text ${sourceInfo} to ${this.getLanguageName(targetLocale)}. 
-Only return the translated text, nothing else. Do not include explanations or notes.
+    const prompt = `Translate the following text ${sourceInfo} to ${this.getLanguageName(targetLocale)}.
+Only return the translated text, nothing else. Do not include explanations, notes, or quotes.
 
-Text to translate: "${text}"`;
+Text to translate: ${text}`;
 
     try {
-      const response = await this.ai.models.generateContent({
+      const response = await this.openai.chat.completions.create({
         model: this.modelName,
-        contents: prompt,
+        messages: [
+          {
+            role: 'system',
+            content:
+              'You are a professional translator. Provide only the translation without any additional explanations, notes, or surrounding quotes.',
+          },
+          {
+            role: 'user',
+            content: prompt,
+          },
+        ],
+        temperature: 0.3, // Lower temperature for more consistent translations
+        max_tokens: 1000,
       });
 
-      const translatedText = response.text?.trim() || '';
+      let translatedText = response.choices[0]?.message?.content?.trim() || '';
+
+      // Strip surrounding quotes if present (sometimes AI adds them)
+      translatedText = this.stripSurroundingQuotes(translatedText);
 
       this.logger.log(
         `Translated "${text}" to ${targetLocale}: "${translatedText}"`,
@@ -57,15 +72,14 @@ Text to translate: "${text}"`;
       return translatedText;
     } catch (error) {
       this.logger.error(
-        `Translation failed for locale ${targetLocale}: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        `Translation failed for locale ${targetLocale}: ${
+          error instanceof Error ? error.message : 'Unknown error'
+        }`,
       );
       throw error;
     }
   }
 
-  /**
-   * Translate multiple texts with rate limiting
-   */
   /**
    * Translate a single text with retry logic for rate limits
    */
@@ -74,17 +88,18 @@ Text to translate: "${text}"`;
     targetLocale: string,
     sourceLocale?: string,
     retries = 3,
-    initialDelay = 10000,
+    initialDelay = 1000,
   ): Promise<string> {
     try {
       return await this.translateText(text, targetLocale, sourceLocale);
     } catch (error: unknown) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorMessage =
+        error instanceof Error ? error.message : String(error);
       if (
         retries > 0 &&
         (errorMessage.includes('429') ||
           errorMessage.includes('Too Many Requests') ||
-          errorMessage.includes('quota'))
+          errorMessage.includes('rate_limit'))
       ) {
         this.logger.warn(
           `Rate limited for ${targetLocale}. Waiting ${initialDelay}ms before retry (${retries} retries left)...`,
@@ -111,9 +126,8 @@ Text to translate: "${text}"`;
     const results: Array<{ locale: string; value: string; error?: string }> =
       [];
 
-    // Process sequentially to respect strict rate limits
-    // Increased to 10 seconds (6 RPM) to be absolutely safe
-    const delayMs = 10000;
+    // Process sequentially with minimal delay for OpenAI (much better rate limits than Gemini)
+    const delayMs = 100; // 100ms delay between requests
 
     this.logger.log(
       `Processing ${requests.length} translations sequentially with ${delayMs}ms delay and auto-retries...`,
@@ -176,6 +190,20 @@ Text to translate: "${text}"`;
     };
 
     return languageNames[locale] || locale;
+  }
+
+  /**
+   * Strip surrounding quotes from text if present
+   */
+  private stripSurroundingQuotes(text: string): string {
+    // Remove matching surrounding quotes (either " or ')
+    if (
+      (text.startsWith('"') && text.endsWith('"')) ||
+      (text.startsWith("'") && text.endsWith("'"))
+    ) {
+      return text.slice(1, -1);
+    }
+    return text;
   }
 
   /**
